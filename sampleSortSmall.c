@@ -16,13 +16,27 @@ int nP, iP, c;
 //MPI_Gather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm)
 
 void sampleSort() {
-	int *pivots, *samples, *sdispls, *recv, *sendcounts, *recvcounts, *rdispls;
+	int i, j, size, sorted, lSorted, ctr, pos;
+	int *pivots, *samples, *lSamples, *sdispls, *res, *sendcounts, *recvcounts, *rdispls;
 	int **start;
-	int i, j, err, size;
 	nSamples = 3; //number of local samples
 	
-	sdispls = malloc((nP) * sizeof(int));
+	res = malloc(2 * n * sizeof(int));
+	
 	sendcounts = malloc(nP * sizeof(int));
+	recvcounts = malloc(nP * sizeof(int));
+	
+	sdispls = malloc(nP * sizeof(int));
+	rdispls = malloc(nP * sizeof(int));
+	
+	pivots =  malloc((nP + 1) * sizeof(int));
+	start =   malloc((nP + 1) * sizeof(int *)); //enough memory?!
+	
+	if(!iP) {
+		samples = malloc(nSamples * nP * sizeof(int));
+	}
+
+
 	int vals[9];
 	if(iP == 0) {
 		vals[0] = 19;
@@ -75,10 +89,7 @@ void sampleSort() {
 		lSamples[2] = 21;
 	}
 	
-	if(!iP) {
-		samples = malloc(nSamples * nP * sizeof(int));
-	}
-	pivots = malloc((nP + 1) * sizeof(int));
+
 
 	//collect all samples to root
 	MPI_Gather( lSamples, nSamples, MPI_INT, 
@@ -98,13 +109,10 @@ void sampleSort() {
 	
 	MPI_Bcast(pivots, nP + 1, MPI_INT, 0, MPI_COMM_WORLD);
 	
-	start = malloc((nP + 1) * sizeof(int *)); //enough memory?!
 	partition(vals, n, pivots, start, nP);
 
-
-	int ctr = 0;
-	int pos = 0;
-	sdispls = malloc(nP * sizeof(int));
+	ctr = 0;
+	pos = 0;
 	sdispls[0] = 0;
 	for(i = 1; i <= nP; i++) {
 		for(j = pos; j < n; j++) {
@@ -123,19 +131,17 @@ void sampleSort() {
 		}
 	}
 	
-	recv = malloc(2 * n * sizeof(int));
-	recvcounts = malloc(nP * sizeof(int));
-	rdispls = malloc(nP * sizeof(int));
+
 	
-	err = my_Alltoallv(vals, sendcounts, sdispls, MPI_INT, 
-                     recv, 2 * n, &size,
+	my_Alltoallv(vals, sendcounts, sdispls, MPI_INT, 
+                     res, 2 * n, &size,
                      recvcounts, rdispls, MPI_INT,
                      MPI_COMM_WORLD);
 
-	intSort(recv, size);
-	printItemsGlobally(recv, size);
-	int lSorted = isGloballySorted(recv, size);
-	int sorted;
+	intSort(res, size);
+	printItemsGlobally(res, size);
+	lSorted = isGloballySorted(res, size);
+
 	MPI_Reduce(&lSorted, &sorted, 1,	MPI_INT, MPI_LAND, 0, MPI_COMM_WORLD);
 	if(!iP) printf("Success? %d\n", sorted );
 	if(!lSamples) free(lSamples);	
