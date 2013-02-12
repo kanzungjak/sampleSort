@@ -7,64 +7,78 @@
 #include "random.h"
 #include "my_alltoallv.c"
 
-int nSamples; //number of samples
-int n; //number of values to be sorted
-int nP, iP, c;
+int n, c; // Number of values to be sorted (per PE), parameter for amount of samples
+int nP, iP; // Amount of PEs, number of own PE
+MPI_Comm comm; // Communicator for Message Passing
 
-// randInit(key, n) generates random numbers
-// intSort(item, size) sequential sort
-//MPI_Gather(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, root, comm)
+void printSorted(int *res, int size) {
+	int lSorted, sorted;
+	sorted = 0;
+	lSorted = isGloballySorted(res, size);
+	MPI_Reduce(&lSorted, &sorted, 1, MPI_INT, MPI_LAND, 0, comm);
+	if(!iP && sorted) {
+		printf("Sorted!\n");
+	} else if(!iP) {
+		printf("Unsorted!\n");
+	}
+}
 
-void sampleSort(int *vals) {
-	int i, j, size, sorted, lSorted, ctr, pos;
-	int *pivots, *samples, *lSamples, *sdispls, *res, *sendcounts, *recvcounts, *rdispls;
+int sampleSort(int *vals, int *res, int maxrcount) {
+	/* Declaration */
+	int size, nSamples, i, j, ctr, pos;
+	int *samples, *lSamples, *pivots, *sendcounts, *recvcounts, *sdispls, *rdispls;
 	int **start;
-	nSamples = ceil(c * log(nP)); //number of local samples
-	
-	lSamples = malloc(nSamples * sizeof(int));
-	
-	res = malloc(2 * n * sizeof(int));
-	
-	sendcounts = malloc(nP * sizeof(int));
-	recvcounts = malloc(nP * sizeof(int));
-	
-	sdispls = malloc((nP + 1) * sizeof(int));
-	rdispls = malloc((nP + 1) * sizeof(int));
-	
-	pivots =  malloc((nP + 1) * sizeof(int));
-	start =   malloc((nP + 1) * sizeof(int *)); 
-	
+
+	/* Initialisation */
+	size = maxrcount; // Variable for local array size, currently set to maxrcount
+	nSamples = ceil(c * log(nP)); // Number of local samples
 	if(!iP) {
-		samples = malloc(nSamples * nP * sizeof(int));
+		samples =
+		     malloc(nSamples * nP * sizeof(int	));
+	}
+	lSamples =   malloc(nSamples 	  * sizeof(int	));
+	pivots =     malloc((nP + 1) 	  * sizeof(int	));
+	start =      malloc((nP + 1)  	  * sizeof(int *)); //Pointer!
+	sendcounts = malloc( nP	     	  * sizeof(int	));
+	recvcounts = malloc( nP	     	  * sizeof(int	));
+	sdispls =    malloc((nP + 1) 	  * sizeof(int	));
+	rdispls =    malloc((nP + 1) 	  * sizeof(int	));
+
+	/* Error Handling */
+	if(!iP && !samples) {
+		perror("Failure: ");
+	}
+	if(!lSamples || !pivots || !sendcounts || !recvcounts || !sdispls || !rdispls || !start) {
+		perror("Failure: ");
 	}
 
-	initParallelRandomLEcuyer( time(NULL) * n, iP, nP); //I'mportant!
-	randInitBound(vals, n, 2 * n);
-
-//	randInit(vals, n); //generate random values
-	
-	for (i = 0; i < nSamples; i++) { //randomly select nSamples samples 
+	/* Local Sample Generation */
+	initParallelRandomLEcuyer(time(NULL) * n, iP, nP);
+	for (i = 0; i < nSamples; i++) { // Random Selection
 		lSamples[i] = vals[(int) (nextRandomLEcuyer() * n)]; 
 	}
 
-	//collect all samples to root
-	MPI_Gather( lSamples, nSamples, MPI_INT, 
-    		    samples, nSamples, MPI_INT, 
-		    0, MPI_COMM_WORLD);
-	
-	if(!iP) { //select pivots
+	// Collect all samples in root
+	MPI_Gather(lSamples, nSamples, MPI_INT, 
+    		   samples,  nSamples, MPI_INT, 
+		   0, MPI_COMM_WORLD);
+
+	/* Pivot Element Generation */
+	if(!iP) {
 		intSort(samples, nSamples * nP);
 		for (i = nSamples, j = 1; i < nSamples * nP; i += nSamples) {
-			pivots[j++] = samples[i]; 
+			pivots[j++] = samples[i];
 		}
-		pivots[0] = INT_MIN; //-infinity
-		pivots[nP] = INT_MAX; //+infinity
+		pivots[0] = INT_MIN; // - Infinity
+		pivots[nP] = INT_MAX; // + Infinity
 	}
 
 	MPI_Bcast(pivots, nP + 1, MPI_INT, 0, MPI_COMM_WORLD);
 
+	/* Partitioning */
 	partition(vals, n, pivots, start, nP);
 
+	/* Send Block Count & Displacement Calculation */
 	ctr = 0;
 	pos = 0;
 	sdispls[0] = 0;
@@ -85,15 +99,16 @@ void sampleSort(int *vals) {
 			}
 		}
 	}
-	
+
+	/* Block Reallocation to PEs */
 	my_Alltoallv(vals, sendcounts, sdispls, MPI_INT, 
-                     res, 2 * n, &size,
+                     res, maxrcount, &size,
                      recvcounts, rdispls, MPI_INT,
-                     MPI_COMM_WORLD);
+                     comm);
 
 	intSort(res, size);
 	
-	for(i = 0; i < nP; i++) {
+	/*for(i = 0; i < nP; i++) {
 		if(iP == i) {
 			for(j = 0; j < n; j++){
 				printf("%d ", vals[j]);
@@ -106,42 +121,79 @@ void sampleSort(int *vals) {
 			puts("");
 		}
 		MPI_Barrier(MPI_COMM_WORLD);
+	}*/
+
+	/* Cleanup */
+	if(!iP && !samples) {
+		free(samples);
 	}
-	
-	printItemsGlobally(res, size);
-	lSorted = isGloballySorted(res, size);
-	//int numSorted = 0;
-	//lSorted = isSorted(res, size);
-	//MPI_Reduce(&lSorted, &numSorted, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-	MPI_Reduce(&lSorted, &sorted, 1, MPI_INT, MPI_LAND, 0, MPI_COMM_WORLD);
-	if(!iP) printf("Success? %d\n", sorted);
-	//if(!iP) printf("From %d PEs %d are sorted.\n", nP, numSorted);
-	if(!lSamples) free(lSamples);
-	if(!iP && !samples) free(samples);
+	if(!lSamples) {
+		free(lSamples);
+	}
+	if(!pivots) {
+		free(pivots);
+	}
+	if(!start) {
+		free(start);
+	}
+	if(!sendcounts) {
+		free(sendcounts);
+	}
+	if(!recvcounts) {
+		free(recvcounts);
+	}
+	if(!sdispls) {
+		free(sdispls);
+	}
+	if(!rdispls) {
+		free(rdispls);
+	}
+
+	return size;
 }
 
 
 int main(int argc, char** argv) {
-	int *vals;
+	/* Declaration */
+	int *vals, *res, size, limit;
 
 	MPI_Init(&argc, &argv);
-	MPI_Comm_size(MPI_COMM_WORLD, &nP);
-	MPI_Comm_rank(MPI_COMM_WORLD, &iP);
-	
+	comm = MPI_COMM_WORLD;
+	MPI_Comm_size(comm, &nP);
+	MPI_Comm_rank(comm, &iP);
+
 	if(argc != 3) {
-		if(!iP) printf("Usage: sampleSort <number of values> <constant for samples>\n");
+		if(!iP) puts("Usage: sampleSort <number of values> <constant for computation of sample amount>");
 		MPI_Finalize();
 		exit(EXIT_FAILURE);
 	}
-	c = atoi(argv[2]); //constant value for nSamples computation
-	n = atoi(argv[1]); //number of values to be sorted
+	c = atoi(argv[2]); // Constant value for computation of nSamples
+	n = atoi(argv[1]); // Number of values to be sorted (per PE)
+	limit = 2 * n;
 
-	vals = malloc(n * sizeof(int));
+	vals = malloc(n     * sizeof(int));
+	res =  malloc(limit * sizeof(int));
+	if(!vals || !res) {
+		perror("Failure: ");
+	}
 
-	sampleSort(vals);
+	/* Initialisation With Random Values */
+	initParallelRandomLEcuyer(time(NULL) * n, iP, nP);
+	randInitBound(vals, n, 2 * n);
+	// randInit(vals, n); // Generate random values
 
-	/*cleanup*/
-	if(!vals) free(vals);
+	/* Method Calls */
+	size = sampleSort(vals, res, limit);
+	printSorted(res, size);
+	printItemsGlobally(res, size);
+
+	/* Cleanup */
+	if(!vals) {
+		free(vals);
+	}
+	if(!res) {
+		free(res);
+	}
 
 	MPI_Finalize();
 	return 0;
