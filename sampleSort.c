@@ -72,8 +72,8 @@ int sampleSort(int *vals, int *res, int maxrcount) {
 
 		// Collect all samples in root
 		MPI_Gather(lSamples, m, MPI_INT,
-			   samples,  m, MPI_INT,
-			   0, MPI_COMM_WORLD);
+				samples,  m, MPI_INT,
+				0, MPI_COMM_WORLD);
 
 		/* Pivot Element selection */
 		if(!iP) {
@@ -103,9 +103,9 @@ int sampleSort(int *vals, int *res, int maxrcount) {
 
 		/* Block Reallocation to PEs */
 		my_Alltoallv(vals, sendcounts, sdispls, MPI_INT,
-			     res, maxrcount, &size,
-			     recvcounts, rdispls, MPI_INT,
-			     comm);
+				res, maxrcount, &size,
+				recvcounts, rdispls, MPI_INT,
+				comm);
 	} else {
 		for(i = 0; i < n; i++) {
 			res[i] = vals[i];
@@ -158,7 +158,7 @@ int main(int argc, char** argv) {
 	comm = MPI_COMM_WORLD;
 	MPI_Comm_size(comm, &nP);
 	MPI_Comm_rank(comm, &iP);
-
+	
 	if(argc != 3) {
 		if(!iP) {
 			puts("Usage: sampleSort <number of values> <constant for computation of sample amount>");
@@ -169,6 +169,7 @@ int main(int argc, char** argv) {
 	c = atoi(argv[2]); // Constant value for computation of m
 	// For n = 2 ^ 18, 700 is a good value for c
 	n = atoi(argv[1]); // Number of values to be sorted (per PE)
+
 
 	it = 1; // Number of iterations to get "proper" measurement results
 	draw = 0; // Should we draw measurement curves?
@@ -185,23 +186,46 @@ int main(int argc, char** argv) {
 	if(draw) {		
 		sprintf(pFile, "p-%d.log", nP);
 		sprintf(npFile, "np-%d.log", n * nP);
-		pData = fopen(pFile,"a");
-		npData = fopen(npFile,"a");
+		pData = fopen(pFile, "a");
+		npData = fopen(npFile, "a");
+	}
+	
+
+
+	if(nP > 1) {
+		/* Initialisation With Random Values */
+		initParallelRandomLEcuyer(time(NULL), iP, nP);
+	} else {
+		initRandomLEcuyer(time(NULL));
 	}
 
 	avgTime = 0.0;
 	for(i = 0; i < it; i++) {
-		/* Initialisation With Random Values */
-		initParallelRandomLEcuyer(time(NULL), iP, nP);
-		randInit(vals, n);
-		// randInitBound(vals, n, nP * n);
-		
-		/* Sorting And Measuring */
-		startTime = MPI_Wtime();
-		size = sampleSort(vals, res, limit);
-		diffTime = MPI_Wtime() - startTime;
-		// printItemsGlobally(res, size);
-		sorted = printGloballySorted(res, size); // Sorted or Unsorted?
+		if(nP > 1) { //parallel case
+			/* Initialisation With Random Values */
+			randInit(vals, n);
+			// randInitBound(vals, n, nP * n);
+
+			/* Sorting And Measuring */
+			startTime = MPI_Wtime();
+			size = sampleSort(vals, res, limit);
+			diffTime = MPI_Wtime() - startTime;
+			// printItemsGlobally(res, size);
+			sorted = printGloballySorted(res, size); // Sorted or Unsorted?
+		} else { //sequential case
+			//random init
+			randInit(vals, n);
+
+			startTime = MPI_Wtime();
+			intSort(vals, n);
+			diffTime = MPI_Wtime() - startTime;
+			sorted = isSorted(vals, n);
+			if(sorted)
+				puts("Sorted!");
+			else
+				puts("Unsorted!");
+
+		}
 
 		if (!iP && it < 2) {
 			printf("Time: %f seconds\n", diffTime);
@@ -222,7 +246,7 @@ int main(int argc, char** argv) {
 	if (!iP && it > 1) {
 		printf("Average Time: %f seconds\n", avgTime);
 	}
-	
+
 	/* Cleanup */
 	if(!vals) {
 		free(vals);
@@ -230,6 +254,14 @@ int main(int argc, char** argv) {
 	if(!res) {
 		free(res);
 	}
+/*
+	if(!pData) {
+		fclose(pData);
+	}
+	if(!npData) {
+		fclose(npData);
+	}
+*/
 
 	MPI_Finalize();
 	return 0;
