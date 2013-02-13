@@ -30,11 +30,11 @@ int my_Alltoallv(void *sendbuf, int *sendcounts, int *sdispls, MPI_Datatype send
 
 	/* Receive Block Displacement Calculation */
 	rdispls[0] = 0;
-	for(i = 0; i <= nP; i++) {
-		rdispls[i+1] = recvcounts[i] + rdispls[i];
+	for(i = 1; i < nP; i++) {
+		rdispls[i] = recvcounts[i-1] + rdispls[i-1];
 	}
 
-	/* Actual Block Size Calculationtion */
+	/* Actual Block Size Calculation */
 	*size = 0;
 	for (i = 0; i < nP; i++) {
 		*size += recvcounts[i];

@@ -8,145 +8,139 @@
 #include "my_alltoallv.c"
 
 int n, c; // Number of values to be sorted (per PE), parameter for amount of samples
-int nP, iP; // Amount of PEs, number of own PE
+int nP, iP; // Amount of PEs, rank of own PE
 MPI_Comm comm; // Communicator for Message Passing
 
-void printSorted(int *res, int size) {
+int printGloballySorted(int *res, int size) {
 	int lSorted, sorted;
 	sorted = 0;
 	lSorted = isGloballySorted(res, size);
-	MPI_Reduce(&lSorted, &sorted, 1, MPI_INT, MPI_LAND, 0, comm);
+	if(nP > 1) {
+		MPI_Reduce(&lSorted, &sorted, 1, MPI_INT, MPI_LAND, 0, comm);
+	} else {
+		sorted = lSorted;
+	}
 	if(!iP && sorted) {
 		printf("Sorted!\n");
 	} else if(!iP) {
 		printf("Unsorted!\n");
 	}
+
+	return sorted;
 }
 
 int sampleSort(int *vals, int *res, int maxrcount) {
 	/* Declaration */
-	int size, nSamples, i, j, ctr, pos;
+	int size, m, i, j;
 	int *samples, *lSamples, *pivots, *sendcounts, *recvcounts, *sdispls, *rdispls;
 	int **start;
 
 	/* Initialisation */
-	size = maxrcount; // Variable for local array size, currently set to maxrcount
-	nSamples = ceil(c * log(nP)); // Number of local samples
-	if(!iP) {
-		samples =
-		     malloc(nSamples * nP * sizeof(int	));
-	}
-	lSamples =   malloc(nSamples 	  * sizeof(int	));
-	pivots =     malloc((nP + 1) 	  * sizeof(int	));
-	start =      malloc((nP + 1)  	  * sizeof(int *)); //Pointer!
-	sendcounts = malloc( nP	     	  * sizeof(int	));
-	recvcounts = malloc( nP	     	  * sizeof(int	));
-	sdispls =    malloc((nP + 1) 	  * sizeof(int	));
-	rdispls =    malloc((nP + 1) 	  * sizeof(int	));
-
-	/* Error Handling */
-	if(!iP && !samples) {
-		perror("Failure: ");
-	}
-	if(!lSamples || !pivots || !sendcounts || !recvcounts || !sdispls || !rdispls || !start) {
-		perror("Failure: ");
+	if(nP > 1) {
+		size = maxrcount; // Variable for local array size, currently set to maxrcount
+	} else {
+		size = n;
 	}
 
-	/* Local Sample Generation */
-	initParallelRandomLEcuyer(time(NULL) * n, iP, nP);
-	for (i = 0; i < nSamples; i++) { // Random Selection
-		lSamples[i] = vals[(int) (nextRandomLEcuyer() * n)]; 
-	}
-
-	// Collect all samples in root
-	MPI_Gather(lSamples, nSamples, MPI_INT, 
-    		   samples,  nSamples, MPI_INT, 
-		   0, MPI_COMM_WORLD);
-
-	/* Pivot Element Generation */
-	if(!iP) {
-		intSort(samples, nSamples * nP);
-		for (i = nSamples, j = 1; i < nSamples * nP; i += nSamples) {
-			pivots[j++] = samples[i];
+	if(nP > 1) {
+		m = c * log(nP); // Number of local samples
+		if(!iP) {
+			samples = 
+			     malloc(m * nP	  * sizeof(int	));
 		}
-		pivots[0] = INT_MIN; // - Infinity
-		pivots[nP] = INT_MAX; // + Infinity
-	}
+		lSamples =   malloc(m	 	  * sizeof(int	));
+		pivots =     malloc((nP + 1) 	  * sizeof(int	));
+		start =      malloc((nP + 1)  	  * sizeof(int *)); // Pointers!
+		sendcounts = malloc( nP	     	  * sizeof(int	));
+		recvcounts = malloc( nP	     	  * sizeof(int	));
+		sdispls =    malloc( nP	 	  * sizeof(int	));
+		rdispls =    malloc( nP	 	  * sizeof(int	));	
 
-	MPI_Bcast(pivots, nP + 1, MPI_INT, 0, MPI_COMM_WORLD);
+		/* Error Handling */
+		if(!iP && !samples) {
+			perror("Failure: ");
+		}
+		if(!lSamples || !pivots || !sendcounts || !recvcounts || !sdispls || !rdispls || !start) {
+			perror("Failure: ");
+		}
 
-	/* Partitioning */
-	partition(vals, n, pivots, start, nP);
+		/* Local Sample selection */
+		initParallelRandomLEcuyer(time(NULL) * n, iP, nP);
+		for (i = 0; i < m; i++) { // Random Selection
+			lSamples[i] = vals[(int) (nextRandomLEcuyer() * n)];
+		}
 
-	/* Send Block Count & Displacement Calculation */
-	ctr = 0;
-	pos = 0;
-	sdispls[0] = 0;
-	for(i = 1; i <= nP; i++) {
-		for(j = pos; j < n; j++) {
-			if(vals[j] < pivots[i]) {
-				ctr++;
-				pos++;
-				if(pos == n) {
-					sendcounts[i-1] = ctr;
-					sdispls[i] = &vals[j] - vals;
-				}
-			} else {
-				sendcounts[i-1] = ctr;
-				sdispls[i] = &vals[j] - vals;
-				ctr = 0;
-				break;
+		// Collect all samples in root
+		MPI_Gather(lSamples, m, MPI_INT,
+			   samples,  m, MPI_INT,
+			   0, MPI_COMM_WORLD);
+
+		/* Pivot Element selection */
+		if(!iP) {
+			intSort(samples, m * nP);
+			for (j = 1, i = m; i < m * nP; i += m) {
+				pivots[j++] = samples[i];
 			}
+			pivots[0] =  INT_MIN; // - Infinity
+			pivots[nP] = INT_MAX; // + Infinity
+		}
+
+		MPI_Bcast(pivots, nP + 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+		/* Partitioning */
+		partition(vals, n, pivots, start, nP);
+
+		/* Send Block Count Calculation */
+		for(i = 0; i < nP; i++) {
+			sendcounts[i] = start[i+1] - start[i];
+		}
+
+		/* Send Block Displacement Calculation */
+		sdispls[0] = 0;
+		for(i = 1; i < nP; i++) {
+			sdispls[i] = sendcounts[i-1] + sdispls[i-1];
+		}
+
+		/* Block Reallocation to PEs */
+		my_Alltoallv(vals, sendcounts, sdispls, MPI_INT,
+			     res, maxrcount, &size,
+			     recvcounts, rdispls, MPI_INT,
+			     comm);
+	} else {
+		for(i = 0; i < n; i++) {
+			res[i] = vals[i];
 		}
 	}
 
-	/* Block Reallocation to PEs */
-	my_Alltoallv(vals, sendcounts, sdispls, MPI_INT, 
-                     res, maxrcount, &size,
-                     recvcounts, rdispls, MPI_INT,
-                     comm);
-
+	/* Local Sorting */
 	intSort(res, size);
-	
-	/*for(i = 0; i < nP; i++) {
-		if(iP == i) {
-			for(j = 0; j < n; j++){
-				printf("%d ", vals[j]);
-			}
-			puts("");
-			printf("pivots: ");
-			for(j = 1; j < nP; j++){
-				printf("%d ", pivots[j]);
-			}
-			puts("");
-		}
-		MPI_Barrier(MPI_COMM_WORLD);
-	}*/
 
 	/* Cleanup */
-	if(!iP && !samples) {
-		free(samples);
-	}
-	if(!lSamples) {
-		free(lSamples);
-	}
-	if(!pivots) {
-		free(pivots);
-	}
-	if(!start) {
-		free(start);
-	}
-	if(!sendcounts) {
-		free(sendcounts);
-	}
-	if(!recvcounts) {
-		free(recvcounts);
-	}
-	if(!sdispls) {
-		free(sdispls);
-	}
-	if(!rdispls) {
-		free(rdispls);
+	if(nP > 1) {
+		if(!iP && !samples) {
+			free(samples);
+		}
+		if(!lSamples) {
+			free(lSamples);
+		}
+		if(!pivots) {
+			free(pivots);
+		}
+		if(!start) {
+			free(start);
+		}
+		if(!sendcounts) {
+			free(sendcounts);
+		}
+		if(!recvcounts) {
+			free(recvcounts);
+		}
+		if(!sdispls) {
+			free(sdispls);
+		}
+		if(!rdispls) {
+			free(rdispls);
+		}
 	}
 
 	return size;
@@ -155,7 +149,10 @@ int sampleSort(int *vals, int *res, int maxrcount) {
 
 int main(int argc, char** argv) {
 	/* Declaration */
-	int *vals, *res, size, limit;
+	int *vals, *res, size, limit, sorted, it, i, draw;	
+	double startTime, diffTime, avgTime;
+	char pFile[20], npFile[20];
+	FILE *pData, *npData;
 
 	MPI_Init(&argc, &argv);
 	comm = MPI_COMM_WORLD;
@@ -163,13 +160,20 @@ int main(int argc, char** argv) {
 	MPI_Comm_rank(comm, &iP);
 
 	if(argc != 3) {
-		if(!iP) puts("Usage: sampleSort <number of values> <constant for computation of sample amount>");
+		if(!iP) {
+			puts("Usage: sampleSort <number of values> <constant for computation of sample amount>");
+		}
 		MPI_Finalize();
 		exit(EXIT_FAILURE);
 	}
-	c = atoi(argv[2]); // Constant value for computation of nSamples
+	c = atoi(argv[2]); // Constant value for computation of m
+	// For n = 2 ^ 18, 700 is a good value for c
 	n = atoi(argv[1]); // Number of values to be sorted (per PE)
-	limit = 2 * n;
+
+	it = 1; // Number of iterations to get "proper" measurement results
+	draw = 0; // Should we draw measurement curves?
+
+	limit = 1.1 * n; // Maximum amount of values for one PE
 
 	vals = malloc(n     * sizeof(int));
 	res =  malloc(limit * sizeof(int));
@@ -177,16 +181,48 @@ int main(int argc, char** argv) {
 		perror("Failure: ");
 	}
 
-	/* Initialisation With Random Values */
-	initParallelRandomLEcuyer(time(NULL) * n, iP, nP);
-	randInitBound(vals, n, 2 * n);
-	// randInit(vals, n); // Generate random values
+	/* Create data files for curve drawing */
+	if(draw) {		
+		sprintf(pFile, "p-%d.log", nP);
+		sprintf(npFile, "np-%d.log", n * nP);
+		pData = fopen(pFile,"a");
+		npData = fopen(npFile,"a");
+	}
 
-	/* Method Calls */
-	size = sampleSort(vals, res, limit);
-	printSorted(res, size);
-	printItemsGlobally(res, size);
+	avgTime = 0.0;
+	for(i = 0; i < it; i++) {
+		/* Initialisation With Random Values */
+		initParallelRandomLEcuyer(time(NULL), iP, nP);
+		randInit(vals, n);
+		// randInitBound(vals, n, nP * n);
+		
+		/* Sorting And Measuring */
+		startTime = MPI_Wtime();
+		size = sampleSort(vals, res, limit);
+		diffTime = MPI_Wtime() - startTime;
+		// printItemsGlobally(res, size);
+		sorted = printGloballySorted(res, size); // Sorted or Unsorted?
 
+		if (!iP && it < 2) {
+			printf("Time: %f seconds\n", diffTime);
+		}
+		avgTime += (double) (diffTime / it);
+	}
+
+	/* Create data for curve drawing */
+	if (!iP && draw) {
+		fprintf(pData,"%d %f\n", n * nP, avgTime);
+		fprintf(npData,"%d %f\n", nP, avgTime);
+		if(!sorted) {
+			fprintf(pData,"%f for %d was incorrect.\n", avgTime, n * nP);
+			fprintf(npData,"%f for %d was incorrect.\n", avgTime, nP);
+		}
+	}
+
+	if (!iP && it > 1) {
+		printf("Average Time: %f seconds\n", avgTime);
+	}
+	
 	/* Cleanup */
 	if(!vals) {
 		free(vals);
